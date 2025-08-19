@@ -1,0 +1,21 @@
+{
+  "name": "conversa",
+  "version": "1.0.0",
+  "description": "TP desing pattern ",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "crypto": "^1.0.1",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "http": "^0.0.1-security",
+    "multer": "^2.0.2",
+    "mysql2": "^3.14.3",
+    "socket.io": "^4.8.1"
+  }
+}
