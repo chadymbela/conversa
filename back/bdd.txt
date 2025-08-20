@@ -1,0 +1,38 @@
+create database conversa;
+
+
+create table users (
+    userId int auto_increment primary key,
+    firstName varchar(30) not null,
+    lastName varchar(30),
+    email varchar(40) not null unique,
+    phoneNumber varchar(15) not null unique,
+    birthDate DATE ,
+    password varchar(150) not null,
+    sexe varchar(1) not null,
+    answerOne varchar(20) not null,
+    answerTwo varchar(40) not null,
+    answerThree VARCHAR (30) not null,
+    created_at TIMESTAMP default current TIMESTAMP
+);
+
+
+create table conversation (
+    conversationId int auto_increment primary key,
+    participantOne int  references users (userId) not null,
+    participantTwo int references users(userId) not null,
+    created_at TIMESTAMP default current TIMESTAMP,
+    state VARCHAR (10) not null default "open"
+);
+
+
+
+create table message (
+messageId int AUTO_INCREMENT primary key,
+messageType varchar(10) not null,
+messageContent TEXT,
+conversation int not null references conversation(conversationId),
+sender int not null references users(userId),
+iv TEXT,
+timeDate timestamp 
+);
