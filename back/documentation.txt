@@ -1,0 +1,399 @@
+
+# Documentation Serveur Express + Socket.io
+
+## Informations Générales
+
+* **Langage / Framework** : Node.js, Express.js
+* **Communication temps réel** : Socket.io
+* **Base de données** : MySQL
+* **Cache / stockage temporaire** : Redis
+* **Fichiers** : multer pour la gestion des uploads
+* **Cryptage des messages** : AES-256-CBC avec `crypto`
+* **Port par défaut** : 3004
+
+Le serveur permet :
+
+1. Gestion des utilisateurs (signup, login, réinitialisation mot de passe)
+2. Gestion des conversations et messages (texte et fichiers)
+3. Communication temps réel via Socket.io
+4. Stockage et récupération sécurisée des messages
+
+---
+
+## 1. API REST
+
+### 1.1 Créer un compte
+
+* **Route** : `POST /signup` (Socket.io event aussi disponible)/ vous en saurez plus dans la partie socket
+* **Paramètres body** :
+
+```json
+{
+  "email": "string",
+  "phoneNumber": "string",
+  "password": "string",
+  "firstName": "string",
+  "lastName": "string",
+  "birthDate": "YYYY-MM-DD",
+  "sexe": "M/F",
+  "answerOne": "string",
+  "answerTwo": "string",
+  "answerThree": "string"
+}
+```
+
+* **Réponse (succès)** :
+
+```json
+{
+  "message": "success",
+  "data": {
+    "userId": 1,
+    "email": "...",
+    "phoneNumber": "...",
+    "firstName": "...",
+    "lastName": "...",
+    "birthDate": "...",
+    "sexe": "...",
+    "answerOne": "...",
+    "answerTwo": "...",
+    "answerThree": "..."
+  }
+}
+```
+
+* **Réponse (erreur)** :
+
+```json
+{ "message": "error", "details": "user already exist" }
+```
+
+---
+
+### 1.2 Connexion utilisateur
+
+* **Route** : `POST /login` (Socket.io event aussi disponible)/ vous en saurez plus dans la partie socket
+* **Paramètres body** :
+
+```json
+{
+  "userId": "email ou phoneNumber",
+  "password": "string"
+}
+```
+
+* **Réponse (succès)** :
+
+```json
+{
+  "message": "success",
+  "data": { ...user data... }
+}
+```
+
+* **Réponse (erreur)** :
+
+```json
+{ "message": "error", "details": "username or password incorrect" }
+```
+
+---
+
+### 1.3 Réinitialisation mot de passe
+
+#### Étape 1 : vérifier réponses secrètes
+
+* **Route** : `POST /reset`
+* **Paramètres body** :
+
+```json
+{
+  "userId": "email ou phoneNumber",
+  "answerOne": "string",
+  "answerTwo": "string",
+  "answerThree": "string"
+}
+```
+
+* **Réponse succès** :
+
+```json
+{ "message": "success", "details": "user found and answers are correct, he can reset his password" }
+```
+
+* **Réponse erreur** :
+
+```json
+{ "message": "error", "details": "wrong answer or user does not exist" }
+```
+
+#### Étape 2 : réinitialiser le mot de passe
+
+* **Route** : `POST /resetPasswordByResetingAccount`
+* **Paramètres body** :
+
+```json
+{
+  "userId": "number",
+  "password": "newPassword"
+}
+```
+
+* **Réponse** :
+
+```json
+{ "message": "success", "details": "password reseted" }
+```
+
+---
+
+### 1.4 Récupérer les conversations d’un utilisateur
+
+* **Route** : `GET /getConversations/:userID`
+* **Paramètre URL** : `userID` = id de l’utilisateur
+* **Réponse** :
+
+```json
+{
+  "message": "success",
+  "data": [ ...liste des conversations avec messages... ]
+}
+```
+
+### 1.5 Récupérer les messages d’une conversation
+
+* **Route** : `GET /getConversation/:id`
+* **Paramètre URL** : `id` = id de la conversation
+* **Réponse** :
+
+```json
+{
+  "message": "success",
+  "data": [
+    {
+      "id": 1,
+      "content": "message décrypté",
+      "sender": "userId",
+      "timedate": "date/heure"
+    }
+  ]
+}
+```
+
+---
+
+### 1.6 Recherche d’un utilisateur
+
+* **Route** : `POST /serachUser`
+* **Paramètres body** :
+
+```json
+{ "userId": "email ou phoneNumber" }
+```
+
+* **Réponse succès** :
+
+```json
+{ "message": "success", "data": [ ...user data... ] }
+```
+
+* **Réponse non trouvé** :
+
+```json
+{ "message": "not found" }
+```
+
+---
+
+### 1.7 Mise à jour profil
+
+* **Route** : `POST /updateProfile`
+* **Paramètres body** :
+
+```json
+{
+  "userId": "number"
+}
+```
+
+* **Paramètre fichier** : `newPhoto` (multipart/form-data)
+* **Réponse succès** :
+
+```json
+{ "message": "success", "data": { "userId": ..., "newPhoto": "filename" } }
+```
+
+---
+
+### 1.8 Mise à jour mot de passe
+
+* **Route** : `POST /updatePassword`
+* **Paramètres body** :
+
+```json
+{
+  "userId": "number",
+  "oldPassword": "string",
+  "newPassword": "string"
+}
+```
+
+* **Réponse succès** :
+
+```json
+{ "message": "success", "details": "password updated successfully" }
+```
+
+---
+
+### 1.9 Mise à jour autres informations
+
+* **Route** : `POST /updateOtherInfo`
+* **Paramètres body** :
+
+```json
+{
+  "userId": "number",
+  "info": "nom_colonne",
+  "value": "nouvelle valeur"
+}
+```
+
+---
+
+### 1.10 Envoyer un fichier dans une conversation
+
+* **Route** : `POST /sendMessageFile`
+* **Paramètres body** :
+
+```json
+{
+  "userId": "number",
+  "conversationId": "number",
+  "fileType": "string"
+}
+```
+
+* **Paramètre fichier** : `file` (multipart/form-data)
+* **Réponse** :
+
+```json
+{ "message": "success" }
+```
+
+---
+
+## 2. Socket.io - Événements temps réel
+
+### 2.1 login
+
+* **Événement** : `"login"`
+* **Données envoyées** : `{ userId, password }`
+* **Réponse** : `{ message, data? }`
+* **Description** : Connecte l’utilisateur et stocke son `socket.id` dans Redis.
+
+---
+
+### 2.2 signup
+
+* **Événement** : `"signup"`
+* **Données envoyées** : `{ email, phoneNumber, password, firstName, lastName, birthDate, sexe, answerOne, answerTwo, answerThree }`
+* **Réponse** : `{ message, data? }`
+* **Description** : Crée un nouvel utilisateur et connecte son socket.
+
+---
+
+### 2.3 sendMessageText
+
+* **Événement** : `"sendMessageText"`
+* **Données envoyées** :
+
+```json
+{
+  "userId": "number",
+  "participantId": "number",
+  "conversation": "conversationId",
+  "messageContent": "string",
+  "messageType": "text"
+}
+```
+
+* **Description** : Crypte le message et l’enregistre en BDD, puis l’émet à l’utilisateur destinataire.
+
+* **Réponse callback** : `{ message: "success" }` ou `{ message: "error" }`
+
+---
+
+### 2.4 deleteMessageText / deleteMessageFile
+
+* **Événement** : `"deleteMessageText"` / `"deleteMessageFile"`
+* **Données envoyées** : `{ messageId, participantId, fileName? }`
+* **Description** : Supprime le message de la BDD et le fichier si nécessaire, puis émet aux sockets concernés.
+
+---
+
+### 2.5 editMessageText
+
+* **Événement** : `"editMessageText"`
+* **Données envoyées** : `{ messageId, participantId, messageContent }`
+* **Description** : Met à jour le message dans la BDD et émet l’édition aux utilisateurs.
+
+---
+
+### 2.6 Emission côté serveur
+
+* **Nouveaux messages** :
+
+```js
+io.to(socketId).emit("newMessageText", data)
+io.to(socketId).emit("newMessageFile", data)
+```
+
+* **Suppression / édition** :
+
+```js
+io.to(socketId).emit("messageDeleted", data)
+io.to(socketId).emit("messageFileDeleted", data)
+io.to(socketId).emit("messageEdited", data)
+```
+
+---
+
+## 3. Cryptage
+
+* Algorithme : `AES-256-CBC`
+* Clé : `cryptoKey` (depuis .env, format hex)
+* IV : généré aléatoirement pour chaque message/fichier
+* **Fonctions** :
+
+```js
+encrypt(text, iv) -> retourne texte chiffré hex
+decrypt(text, iv) -> retourne texte clair
+```
+
+---
+
+## 4. Stockage des fichiers
+
+* **Photos de profil** : dossier `profilPhoto`
+* **Fichiers de messages** : dossier `messageFiles`
+* Nom de fichier généré automatiquement : `timestamp_userId.ext`
+
+---
+
+## 5. Redis
+
+* Utilisé pour stocker les `socket.id` de chaque utilisateur connecté pour l’envoi de messages en temps réel.
+* Liste par utilisateur : `user<id>`
+
+---
+
+## 6. Notes pour le front-end
+
+1. Pour les événements temps réel, utiliser `socket.emit("eventName", data, callback)`
+2. Pour récupérer des données persistantes, utiliser les routes API REST
+3. Les messages sont cryptés côté serveur, le front reçoit le texte clair via Socket.io
+4. Les fichiers doivent être envoyés via `multipart/form-data` avec `file` ou `newPhoto` selon le cas
+
+---
+

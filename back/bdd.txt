@@ -10,7 +10,8 @@ create table users (
     birthDate DATE ,
     password varchar(150) not null,
     sexe varchar(1) not null,
-    answerOne varchar(20) not null,
+    profile varchar(20) not null,
+    answerOne varchar(20) not null default "user.png,
     answerTwo varchar(40) not null,
     answerThree VARCHAR (30) not null,
     created_at TIMESTAMP default current TIMESTAMP

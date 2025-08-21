@@ -5,14 +5,16 @@ const dotenv = require("dotenv");
 dotenv.config();
 const http = require("http");
 const {Server} = require("socket.io");
-const mysql = require("mysql2");
+const mysql = require("mysql2/promise");
 const multer = require("multer");
 const {createClient} = require("redis");
-const redis = createClient({url: process.env.REDIS_URL}).connect();
+const redis = createClient({url: process.env.REDIS_URL})
+await redis.connect();
 const crypto = require("crypto");
 const path = require("path");
 const cryptoKey = Buffer.from(process.env.CRYPTO_KEY, "hex");
-const path = require("path");
+const fs = require("fs");
+const bcrypt = require("bcrypt");
 
 const port = process.env.PORT || 3004;
 const app = express();
@@ -51,6 +53,19 @@ const diskstorage = multer.diskStorage({
 });
 const uploadProfilPhoto = multer({ storage: diskstorage });
 
+const messageFileStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, "messageFiles");
+    },
+    filename: function (req, file, cb) {
+        const {conversationId, userId} = req.body;
+        // on utilise le participantId pour savoir à qui appartient le fichier
+        cb(null, Date.now() + "_" + conversationId + "_" + userId + path.extname(file.originalname));
+    }
+})
+
+const uploadMessageFile = multer({ storage: messageFileStorage });
+
 
 function encrypt(text, iv) {
     let cipher = crypto.createCipheriv('aes-256-cbc', cryptoKey, iv);
@@ -61,6 +76,11 @@ function encrypt(text, iv) {
 
 
 function decrypt(text, iv) {
+    // on utilise le même iv que celui utilisé pour chiffrer le texte
+    // on utilise le même cryptoKey que celui utilisé pour chiffrer le texte
+    iv = Buffer.from(iv, "hex");
+    // on crée un objet de déchiffrement avec le même algorithme, la même clé et le même iv
+
     let decipher = crypto.createDecipheriv('aes-256-cbc', cryptoKey, iv);
     let decrypted = decipher.update(text, "hex", "utf8");
     decrypted += decipher.final("utf8");
@@ -104,9 +124,9 @@ io.on("connection", (socket) => {
 
             // si l'insertion dans la bdd réussit on renvoie un message de succès et emet pour que l'utilisateur concerné soit em
             
-            const socketIds = await (await redis).lRange("user" + participantId, 0, -1);
+            const socketIds = await redis.lRange("user" + data.participantId, 0, -1);
             socketIds.forEach((socketId) => {
-                io.to(socketId).emit("newMessage", data);
+                io.to(socketId).emit("newMessageText", data); // on emet le message à l'utilisateur concerné
             })
             callback({ message: "success" });
 
@@ -116,12 +136,12 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("deleteMessage", async (data, callback) =>{
+    socket.on("deleteMessageText", async (data, callback) =>{
         try {
             const sql = "DELETE FROM message WHERE messageId = ?";
             await db.query(sql, [data.messageId]);
 
-            const socketIds = await (await redis).lRange("user" + participantId, 0, -1);
+            const socketIds = await redis.lRange("user" + data.participantId, 0, -1);
             
             socketIds.forEach((socketId) => {
                 io.to(socketId).emit("messageDeleted", data);
@@ -134,14 +154,38 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("editMessage", async (data, callback) =>{
+    socket.on("deleteMessageFile", async (data, callback) =>{
+        try {
+            const sql = "DELETE FROM message WHERE messageId = ?";
+            await db.query(sql, [data.messageId]);
+
+            // on supprime le fichier du disque
+            const filePath = path.join(__dirname, "messageFiles", data.fileName);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+
+            const socketIds = await  redis.lRange("user" + participantId, 0, -1);
+            
+            socketIds.forEach((socketId) => {
+                io.to(socketId).emit("messageFileDeleted", data);
+            })
+
+            callback({ message: "success" });
+        }
+        catch (err) {
+            return callback({ message: "error" })
+        }
+    });
+
+    socket.on("editMessageText", async (data, callback) =>{
         try {
             const iv = crypto.randomBytes(16);
             const newContentEncrypted = encrypt(data.messageContent, iv);
             const sql = "UPDATE message SET messageContent = ? WHERE messageId = ?";
             await db.query(sql, [newContentEncrypted, data.messageId]);
             
-            const socketIds = await (await redis).lRange("user" + participantId, 0, -1);
+            const socketIds = await redis.lRange("user" + participantId, 0, -1);
 
             socketIds.forEach((socketId) => {
                 io.to(socketId).emit("messageEdited", data);
@@ -156,6 +200,32 @@ io.on("connection", (socket) => {
     
 });
 
+app.post("/sendMessageFile", uploadMessageFile.single("file"), async (req, res) => {
+    const {userId, conversationId, fileType} = req.body;
+    const file = req.file.filename;
+    const timedate = new Date().toLocaleString();
+    const iv = crypto.randomBytes(16);
+    const stockableIv = iv.toString("hex");
+    const sql = "INSERT INTO message (messageContent, messageType, sender, conversation, iv, timedate) VALUES (?, ?, ?, ?, ?, ?)";
+
+    try{
+        const encryptedFile = encrypt(file, iv);
+        await db.query(sql, [encryptedFile, fileType, userId, conversationId, stockableIv, timedate]);
+
+        // on envoie le message à tous les utilisateurs de la conversation
+        const socketIds = await redis.lRange("user" + userId, 0, -1);
+        socketIds.forEach((socketId) => {
+            io.to(socketId).emit("newMessageFile", {messageContent: file, messageType: fileType, userId, conversationId, iv, timedate});
+        });
+
+        return res.json({message: "success"});
+    }
+    catch (err) {
+        return res.json({ message: "error" , details: "database error" });
+    }
+
+});
+
 
 async function login(body) {
     // on récupère les données de l'utilisateur et userId peut etre le numéro de téléphone ou l'email de l'utilisateur
@@ -166,7 +236,7 @@ async function login(body) {
     try {
         const result = await db.query(sql, [userId, userId]);
         // si l'utilisateur n'existe pas on renvoie un message d'erreur
-        if(result.lenght < 0)  return { message: "username or password incorrect", details: "username or password incorrect" } 
+        if(result.length < 0)  return { message: "username or password incorrect", details: "username or password incorrect" } 
         
         // si l'utilisateur existe on vérifie si le mot de passe est correct
         const match = await bcrypt.compare(password, result[0].password)
@@ -193,7 +263,7 @@ async function signup(body) {
     const chechSql = "SELECT * FROM users WHERE email = ? OR phoneNumber = ?"
     try {
         const userExist = await db.query(chechSql, [email, phoneNumber])
-        if(userExist.lenght > 0)  return {message: "error", details: "user already exist"} 
+        if(userExist.length > 0)  return {message: "error", details: "user already exist"} 
         // s'il n'existe pas on l'ajoute à la base de données par la fonction addUser()
         return addUser();
     }
@@ -289,12 +359,12 @@ app.get("/getConversation/:id", async (req, res) => {
         const messages = result.map(message => {
             return {
                 id: message.messageId,
-                content: decrypt(message.content, Buffer.from(message.iv, "hex")),
+                content: decrypt(message.messageContent, Buffer.from(message.iv, "hex")),
                 sender: message.sender,
                 timedate: message.timedate
             }
         })
-        return res.json({message: "success", data: result})
+        return res.json({message: "success", data: messages})
     }
     catch (err) {
         return res.json({message: "error", details: "database error"})
@@ -307,7 +377,7 @@ app.post("/serachUser", async(req, res) => {
 
     try {
         const user = await db.query(sql, [userId, userId])
-        user.lenght == 0 && res.json({message: "not found"})
+        user.length == 0 && res.json({message: "not found"})
 
         return res.json({message: "sucess", data: user})
     }
@@ -317,7 +387,64 @@ app.post("/serachUser", async(req, res) => {
     }
 });
 
-app.post("/updateProfile", uploadProfilPhoto.single("newPhoto"), async)
+app.post("/updateProfile", uploadProfilPhoto.single("newPhoto"), async(req, res) => {
+    const {userId} = req.body;
+    const newPhoto = req.file ? req.file.filename : null; // si l'utilisateur n'a pas envoyé de nouvelle photo, on garde l'ancienne
+    const sql = "UPDATE users SET profile = ? WHERE userId = ?";
+
+    try{
+        if (!newPhoto) {
+            return res.json({message: "error", details: "no photo provided"});
+        }
+        // on met à jour la photo de profil de l'utilisateur dans la base de données
+        await db.query(sql, [newPhoto, userId]);
+        return res.json({message: "success", data: {userId, newPhoto}})
+    }
+    catch (err) {
+        res.json({message: "error", details: "database error"});
+    }
+
+});
+
+app.post("/updatePassword", async (req, res) => {
+    const {userId, oldPassword, newPassword} = req.body;
+    const sql = "SELECT * FROM users WHERE userId = ?";
+
+    try {
+        const user = await db.query(sql, [userId]);
+        if (user.length === 0) {
+            return res.json({message: "error", details: "user not found"});
+        }
+
+        const match = await bcrypt.compare(oldPassword, user[0].password);
+        if (!match) {
+            return res.json({message: "error", details: "old password is incorrect"});
+        }
+
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+        const updateSql = "UPDATE users SET password = ? WHERE userId = ?";
+        await db.query(updateSql, [hashedNewPassword, userId]);
+
+        return res.json({message: "success", details: "password updated successfully"});
+    }
+    catch (err) {
+        return res.json({message: "error", details: "database error"});
+    }
+});
+
+app.post("/updateOtherInfo", async (req, res) => {
+    const {userId, info, value} = req.body;
+    const sql = "UPDATE users SET ?? = ? WHERE userId = ?";
+
+
+    try {
+        await db.query(sql, [info, value, userId]);
+        return res.json({message: "success", details: "info updated successfully"});
+    }
+    catch (err) {
+        return res.json({message: "error", details: "database error"});
+    }
+});
 
 
 
