@@ -1,6 +1,13 @@
-const { randomBytes } = require("crypto");
+const io = require("socket.io-client");
 
-const key = randomBytes(32);
+// si ton serveur Node tourne sur localhost et port 3005
+const socket = io("http://localhost:3005");
 
-console.log(key.toString("hex"));
-console.log(key)
+const data = {
+    userId: "benjilumbala@gmail.com",
+    password: "10benjluX?",
+}
+
+socket.emit("login", data, (response) => {
+    console.log("login response:", response);
+});

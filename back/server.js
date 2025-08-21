@@ -7,9 +7,8 @@ const http = require("http");
 const {Server} = require("socket.io");
 const mysql = require("mysql2/promise");
 const multer = require("multer");
-const {createClient} = require("redis");
-const redis = createClient({url: process.env.REDIS_URL})
-await redis.connect();
+const NodeCache = require("node-cache");
+const cache = new NodeCache();
 const crypto = require("crypto");
 const path = require("path");
 const cryptoKey = Buffer.from(process.env.CRYPTO_KEY, "hex");
@@ -37,6 +36,7 @@ async function intiDb() {
         user: process.env.DB_USER,
         password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME,
+        port: process.env.DB_PORT
     })
 };
 
@@ -85,7 +85,30 @@ function decrypt(text, iv) {
     let decrypted = decipher.update(text, "hex", "utf8");
     decrypted += decipher.final("utf8");
     return decrypted;
-}
+};
+
+
+function addUserSocketId(userId, socketId) {
+    // on ajoute l'id de la socket à la liste des sockets de l'utilisateur dans node-cache
+    const userSockets = cache.get("userConnected") || [];
+    if(!userSockets.filter(user => user.userId === userId && user.socketId === socketId)) {
+        userSockets.push({userId, socketId});
+        cache.set("userConnected", userSockets);
+    }
+};
+
+function removeUserSocketId(socketId) {
+    // on supprime l'id de la socket de la liste des sockets de l'utilisateur dans node-cache
+    const userSockets = cache.get("userConnected") || [];
+    const newUserSockets = userSockets.filter(user => !(user.socketId === socketId));
+    cache.set("userConnected", newUserSockets);
+};
+
+function getUserSocketIds(userId) {
+    // on récupère la liste des sockets de l'utilisateur dans node-cache
+    const userSockets = cache.get("userConnected") || [];
+    return userSockets.filter(user => user.userId === userId).map(user => user.socketId);
+};
 
 
 // initialisation et lancement de l'utisation de notre serveur en temps réel
@@ -95,7 +118,8 @@ io.on("connection", (socket) => {
     socket.on("login", async(data, callback) => {
         const response = await login(data);
         if (response.message === "success") {
-            (await redis).lPush("user" + response.data.id, socket.id);
+            addUserSocketId(response.data.id, socket.id);
+            io.emit("userConnected", { userId: response.data.id, socketId: socket.id });
         }
         callback(response);
 
@@ -105,7 +129,7 @@ io.on("connection", (socket) => {
     socket.on("signup", async (data, callback) =>{
         const response = await signup(data);
         if (response.message === "success") {
-            (await redis).lPush("user" + response.data.id, socket.id);
+            addUserSocketId(response.data.userId, socket.id);
         }
         callback(response);
     })
@@ -124,7 +148,7 @@ io.on("connection", (socket) => {
 
             // si l'insertion dans la bdd réussit on renvoie un message de succès et emet pour que l'utilisateur concerné soit em
             
-            const socketIds = await redis.lRange("user" + data.participantId, 0, -1);
+            const socketIds = getUserSocketIds(data.participantId);
             socketIds.forEach((socketId) => {
                 io.to(socketId).emit("newMessageText", data); // on emet le message à l'utilisateur concerné
             })
@@ -141,7 +165,7 @@ io.on("connection", (socket) => {
             const sql = "DELETE FROM message WHERE messageId = ?";
             await db.query(sql, [data.messageId]);
 
-            const socketIds = await redis.lRange("user" + data.participantId, 0, -1);
+            const socketIds = getuserSocketIds(data.participantId);
             
             socketIds.forEach((socketId) => {
                 io.to(socketId).emit("messageDeleted", data);
@@ -165,7 +189,7 @@ io.on("connection", (socket) => {
                 fs.unlinkSync(filePath);
             }
 
-            const socketIds = await  redis.lRange("user" + participantId, 0, -1);
+            const socketIds = getuserSocketIds(data.participantId);
             
             socketIds.forEach((socketId) => {
                 io.to(socketId).emit("messageFileDeleted", data);
@@ -185,7 +209,7 @@ io.on("connection", (socket) => {
             const sql = "UPDATE message SET messageContent = ? WHERE messageId = ?";
             await db.query(sql, [newContentEncrypted, data.messageId]);
             
-            const socketIds = await redis.lRange("user" + participantId, 0, -1);
+            const socketIds = getuserSocketIds(data.participantId);
 
             socketIds.forEach((socketId) => {
                 io.to(socketId).emit("messageEdited", data);
@@ -197,7 +221,14 @@ io.on("connection", (socket) => {
             return callback({ message: "error" })
         }
     });
+
+    socket.on("disconnect", () => {
+        // quand l'utilisateur se déconnecte on supprime son id de la liste des sockets de l'utilisateur dans node-cache
+        removeUserSocketId(socket.id);
+    }
     
+);
+
 });
 
 app.post("/sendMessageFile", uploadMessageFile.single("file"), async (req, res) => {
@@ -213,7 +244,7 @@ app.post("/sendMessageFile", uploadMessageFile.single("file"), async (req, res) 
         await db.query(sql, [encryptedFile, fileType, userId, conversationId, stockableIv, timedate]);
 
         // on envoie le message à tous les utilisateurs de la conversation
-        const socketIds = await redis.lRange("user" + userId, 0, -1);
+        const socketIds = getuserSocketIds(userId);
         socketIds.forEach((socketId) => {
             io.to(socketId).emit("newMessageFile", {messageContent: file, messageType: fileType, userId, conversationId, iv, timedate});
         });
@@ -230,16 +261,23 @@ app.post("/sendMessageFile", uploadMessageFile.single("file"), async (req, res) 
 async function login(body) {
     // on récupère les données de l'utilisateur et userId peut etre le numéro de téléphone ou l'email de l'utilisateur
     const { userId, password } = body;
-    const sql = "SELECT * FROM users WHERE email = ? OR phoneNumber = ?"
+    const sql = "SELECT * FROM users WHERE email = ? OR phoneNumber = ?";
     
     // on vérifie si l'utilisateur existe dans la base de données
     try {
-        const result = await db.query(sql, [userId, userId]);
+        const [result] = await db.query(sql, [userId, userId]);
         // si l'utilisateur n'existe pas on renvoie un message d'erreur
-        if(result.length < 0)  return { message: "username or password incorrect", details: "username or password incorrect" } 
+        if(result.length === 0)  return { message: "username or password incorrect", details: "username or password incorrect  "} 
         
         // si l'utilisateur existe on vérifie si le mot de passe est correct
-        const match = await bcrypt.compare(password, result[0].password)
+        let match;
+        try {
+            match = await bcrypt.compare(password, result[0].password)
+        }
+        catch (err) {
+            // si il y a une erreur lors de la comparaison des mots de passe on renvoie un message d'erreur
+            return { message: "error", details: "password comparison error"  + "_  " + err.message }
+        }
     
         // si le mot de passe est correct on renvoie les données de l'utilisateur au cas contraire on renvoie un message d'erreur 
         const connectedUser = { message: "success", data: result[0] };
@@ -248,22 +286,25 @@ async function login(body) {
     }
     // si il y a une erreur on renvoie un message d'erreur
     catch (err) {
-        return {message: "error", details: "database error"}
+        return {message: "error", details: "database error" + "_  " + err.message}
     }
     
-}
+};
 
 
 
 async function signup(body) {
     // on recupère les données du formulaire venant de l'utilisateur et on les stocke dans des variables
     const {email, phoneNumber, password, firstName, lastName, birthDate, sexe, answerOne, answerTwo, answerThree} = body;
+    
 
     // on vérifie si l'utilisateur existe déjà
     const chechSql = "SELECT * FROM users WHERE email = ? OR phoneNumber = ?"
     try {
-        const userExist = await db.query(chechSql, [email, phoneNumber])
-        if(userExist.length > 0)  return {message: "error", details: "user already exist"} 
+        const [userExist] = await db.query(chechSql, [email, phoneNumber])
+        if(userExist.length > 0)  {
+            return {message: "error", details: "user already exist"}
+        }
         // s'il n'existe pas on l'ajoute à la base de données par la fonction addUser()
         return addUser();
     }
@@ -280,10 +321,12 @@ async function signup(body) {
         // on exécute la requête SQL avec les données de l'utilisateur
        
         try {
-            const result = await db.query(sql, [email, phoneNumber, password, firstName, lastName, birthDate, sexe, answerOne, answerTwo, answerThree]);
+            const hashedPassword = await bcrypt.hash(password, 10); // on hash le mot de passe avant de l'insérer dans la base de données
+
+            const [result] = await db.query(sql, [email, phoneNumber, hashedPassword, firstName, lastName, birthDate, sexe, answerOne, answerTwo, answerThree]);
 
             // si l'insertion est réussie, on renvoie un message de succès avec les données de l'utilisateur en y ajoutant le Id qu'il recevra de la bdd
-            return {message: "success", data: {userId: result.insertId, email, phoneNumber, firstName, lastName, birthDate, sexe, answerOne, answerTwo, answerThree}}
+            return {message: "success", data: login({userId: email, password})};
         }
         catch (err) {
             // si l'insertion échoue, on renvoie un message d'erreur
@@ -291,7 +334,7 @@ async function signup(body) {
         }
 
     }
-}
+};
 
 
 app.post("reset", async (req, res) => {
@@ -302,7 +345,7 @@ app.post("reset", async (req, res) => {
     const sql = "SELECT * FROM users WHERE (email = ? OR phoneNumber = ?) AND answerOne = ? AND answerTwo = ? AND answerThree = ?";
 
     try {
-        const result = await db.query(sql, [userId, userId, answerOne, answerTwo, answerThree]);
+        const [result] = await db.query(sql, [userId, userId, answerOne, answerTwo, answerThree]);
 
         // si l'utilisateur n'existe pas ou que les réponses sont incorrectes, on renvoie un message d'erreur
         if (result.length === 0) {
@@ -342,7 +385,7 @@ app.get("/getConversations/:userID", async (_, res) => {
     const sql = "SELECT * FROM conversation.*, message.* JOIN message ON conversationId = message.id ORDER BY conversationId DESC WHERE participant1 = ? OR participant2 = ?";
 
     try {
-        const result = await db.query(sql, [userID, userID]);
+        const [result] = await db.query(sql, [userID, userID]);
         return res.json({message: "success", data: result})
     }
     catch(err){
@@ -355,7 +398,7 @@ app.get("/getConversation/:id", async (req, res) => {
     const sql = "SELECT * FROM message ORDER BY timedate DESC WHERE conversationId = ?";
 
     try {
-        const result = await db.query(sql, [id]);
+        const [ result] = await db.query(sql, [id]);
         const messages = result.map(message => {
             return {
                 id: message.messageId,
@@ -398,6 +441,7 @@ app.post("/updateProfile", uploadProfilPhoto.single("newPhoto"), async(req, res)
         }
         // on met à jour la photo de profil de l'utilisateur dans la base de données
         await db.query(sql, [newPhoto, userId]);
+        io.emit("profileUpdated", {userId, newPhoto}); // on émet un événement pour informer les autres utilisateurs que la photo de profil a été mise à jour
         return res.json({message: "success", data: {userId, newPhoto}})
     }
     catch (err) {
@@ -439,6 +483,8 @@ app.post("/updateOtherInfo", async (req, res) => {
 
     try {
         await db.query(sql, [info, value, userId]);
+        // on émet un événement pour informer les autres utilisateurs que les informations de l'utilisateur ont été mises à jour
+        io.emit("otherInfoUpdated", {userId, info, value});
         return res.json({message: "success", details: "info updated successfully"});
     }
     catch (err) {

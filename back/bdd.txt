@@ -1,39 +1,40 @@
-create database conversa;
+CREATE DATABASE IF NOT EXISTS conversa;
+USE conversa;
 
-
-create table users (
-    userId int auto_increment primary key,
-    firstName varchar(30) not null,
-    lastName varchar(30),
-    email varchar(40) not null unique,
-    phoneNumber varchar(15) not null unique,
-    birthDate DATE ,
-    password varchar(150) not null,
-    sexe varchar(1) not null,
-    profile varchar(20) not null,
-    answerOne varchar(20) not null default "user.png,
-    answerTwo varchar(40) not null,
-    answerThree VARCHAR (30) not null,
-    created_at TIMESTAMP default current TIMESTAMP
+CREATE TABLE users (
+    userId INT AUTO_INCREMENT PRIMARY KEY,
+    firstName VARCHAR(30) NOT NULL,
+    lastName VARCHAR(30),
+    email VARCHAR(40) NOT NULL UNIQUE,
+    phoneNumber VARCHAR(15) NOT NULL UNIQUE,
+    birthDate DATE,
+    password VARCHAR(150) NOT NULL,
+    sexe VARCHAR(1) NOT NULL,
+    profile VARCHAR(20) NOT NULL DEFAULT 'user.png',
+    answerOne VARCHAR(20) NOT NULL,
+    answerTwo VARCHAR(40) NOT NULL,
+    answerThree VARCHAR(30) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-
-create table conversation (
-    conversationId int auto_increment primary key,
-    participantOne int  references users (userId) not null,
-    participantTwo int references users(userId) not null,
-    created_at TIMESTAMP default current TIMESTAMP,
-    state VARCHAR (10) not null default "open"
+CREATE TABLE conversation (
+    conversationId INT AUTO_INCREMENT PRIMARY KEY,
+    participantOne INT NOT NULL,
+    participantTwo INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    state VARCHAR(10) NOT NULL DEFAULT 'open',
+    FOREIGN KEY (participantOne) REFERENCES users(userId) ON DELETE CASCADE,
+    FOREIGN KEY (participantTwo) REFERENCES users(userId) ON DELETE CASCADE
 );
 
-
-
-create table message (
-messageId int AUTO_INCREMENT primary key,
-messageType varchar(10) not null,
-messageContent TEXT,
-conversation int not null references conversation(conversationId),
-sender int not null references users(userId),
-iv TEXT,
-timeDate timestamp 
+CREATE TABLE message (
+    messageId INT AUTO_INCREMENT PRIMARY KEY,
+    messageType VARCHAR(10) NOT NULL,
+    messageContent TEXT,
+    conversation INT NOT NULL,
+    sender INT NOT NULL,
+    iv TEXT,
+    timeDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation) REFERENCES conversation(conversationId) ON DELETE CASCADE,
+    FOREIGN KEY (sender) REFERENCES users(userId) ON DELETE CASCADE
 );

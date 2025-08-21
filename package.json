@@ -17,9 +17,11 @@
     "http": "^0.0.1-security",
     "multer": "^2.0.2",
     "mysql2": "^3.14.3",
+    "node-cache": "^5.1.2",
     "nodemon": "^3.1.10",
     "path": "^0.12.7",
     "redis": "^5.8.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
   }
 }
