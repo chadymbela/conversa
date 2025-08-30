@@ -1,0 +1,67 @@
+#entete_page{
+    background: rgba(112, 128, 144, 0.918);
+    padding: 15px;
+    color: aliceblue;
+
+    #div_profil{
+        img{
+            width: 50px;
+            border-radius: 50%;
+            margin-right: 25px;
+        }
+        h6{
+            margin-right: 10px;
+        }
+    }
+}
+
+#body_conversation{
+    height: 82vh;
+
+    #messages{
+        overflow: auto;
+        padding-bottom: 20%;
+
+        #user_message{
+            img{
+                width: 40px ; 
+                border-radius: 50%;
+                margin-left: 25px;
+            }
+            h6{
+                margin-left: 5px;
+            }
+            
+        }
+    }
+
+
+    #div_conversation{
+        overflow: auto;
+
+        #conversation{
+            img{
+                width: 30px;
+                border-radius: 50%;
+                margin: 5px;
+            }
+            h5{
+                margin: 5px;
+            }
+        }
+    }
+
+
+
+
+
+
+
+
+    #div_input_massage{
+        position: fixed;
+        width: 74%;
+        bottom: 1%;
+        
+    }
+}
